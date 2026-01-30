@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Atlas Request
+    url: https://github.com/orgs/ggseg/discussions/categories/atlas-wishlist
+    about: Request a new atlas. Please check existing requests first.
+  - name: Questions & Discussion
+    url: https://github.com/orgs/ggseg/discussions
+    about: Ask questions or start a discussion with the community.

@@ -1,6 +1,6 @@
-# Reusable: render README.qmd via Quarto and commit the result on the
+# Reusable: render README.Rmd via Quarto and commit the result on the
 # default branch. Called by each package via a thin caller stub that
-# triggers on pushes/PRs touching README.qmd.
+# triggers on pushes/PRs touching README.Rmd.
 on:
   workflow_call:
 
@@ -40,4 +40,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md man/figures/README-*
-          git diff --staged --quiet || git commit -m "Re-render README.qmd" && git push
+          git diff --staged --quiet || git commit -m "Re-render README.Rmd" && git push

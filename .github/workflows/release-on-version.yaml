@@ -1,0 +1,69 @@
+# Reusable: tag + create a GitHub release when DESCRIPTION Version is a
+# release version (x.y.z). Development versions (x.y.z.9000) are skipped.
+# Called by each package via a thin caller stub.
+on:
+  workflow_call:
+
+name: release-on-version (reusable)
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          version=$(grep -m1 '^Version:' DESCRIPTION | sed -E 's/^Version:[[:space:]]*//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version $version is a development version; skipping."
+          fi
+
+      - name: Check tag does not exist
+        id: tag
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          tag="v${{ steps.version.outputs.version }}"
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag $tag already exists; nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from NEWS.md
+        id: notes
+        if: steps.version.outputs.is_release == 'true' && steps.tag.outputs.exists == 'false'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          out="$RUNNER_TEMP/relnotes.md"
+          if [ -f NEWS.md ] && awk -v ver="$version" '
+              index($0, "# ") == 1 && $0 ~ ("[ ]" ver "([^0-9.]|$)") {f=1; next}
+              index($0, "# ") == 1 {f=0}
+              f {print}
+            ' NEWS.md | sed '/./,$!d' > "$out" && [ -s "$out" ]; then
+            echo "file=$out" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag and release
+        if: steps.version.outputs.is_release == 'true' && steps.tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          if [ -n "${{ steps.notes.outputs.file }}" ]; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes-file "${{ steps.notes.outputs.file }}"
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          fi

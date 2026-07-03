@@ -32,7 +32,7 @@ jobs:
       - uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Render README
-        run: quarto render README.qmd
+        run: quarto render README.Rmd
 
       - name: Commit and push
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'

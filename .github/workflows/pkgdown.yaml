@@ -19,7 +19,8 @@ on:
 
 name: pkgdown (reusable)
 
-permissions: read-all
+permissions:
+  contents: write
 
 jobs:
   pkgdown:

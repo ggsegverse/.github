@@ -1,0 +1,83 @@
+# Reusable: build a pkgdown site and deploy it to the gh-pages branch.
+# Triggers (push / release / workflow_dispatch / pull_request) live in each
+# package's caller stub.
+on:
+  workflow_call:
+    inputs:
+      extra-packages:
+        description: "Value for setup-r-dependencies `extra-packages` (may be multiline)."
+        type: string
+        default: "any::pkgdown, local::."
+      use-chromote:
+        description: "Install Chrome + configure chromote (pkgdown sites that snapshot 3D/JS widgets)."
+        type: boolean
+        default: false
+      install-spatial-deps:
+        description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries."
+        type: boolean
+        default: false
+
+name: pkgdown (reusable)
+
+permissions: read-all
+
+jobs:
+  pkgdown:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pkgdown-${{ github.event_name != 'pull_request' || github.run_id }}
+    permissions:
+      contents: write
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: browser-actions/setup-chrome@v2
+        id: setup-chrome
+        if: ${{ inputs.use-chromote }}
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: ${{ inputs.extra-packages }}
+          needs: website
+
+      - name: Build site
+        if: ${{ ! inputs.use-chromote }}
+        run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+        shell: Rscript {0}
+
+      - name: Build site (chromote)
+        if: ${{ inputs.use-chromote }}
+        env:
+          CHROMOTE_CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
+        shell: Rscript {0}
+        run: |
+          chromote::set_default_chromote_object(
+            chromote::Chromote$new(
+              browser = chromote::Chrome$new(
+                args = c(chromote::default_chrome_args(), "--no-sandbox")
+              )
+            )
+          )
+          pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+
+      - name: Deploy to GitHub pages 🚀
+        if: github.event_name != 'pull_request'
+        uses: JamesIves/github-pages-deploy-action@v4.8.0
+        with:
+          clean: false
+          branch: gh-pages
+          folder: docs

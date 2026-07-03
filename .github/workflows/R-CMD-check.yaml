@@ -1,0 +1,74 @@
+# Reusable: R CMD check across the standard multi-OS / multi-R matrix.
+# Triggers (push / pull_request / schedule) live in each package's caller
+# stub, so per-repo cron staggering and branch filters are preserved.
+on:
+  workflow_call:
+    inputs:
+      extra-packages:
+        description: "Value for setup-r-dependencies `extra-packages` (may be multiline)."
+        type: string
+        default: "any::rcmdcheck"
+      build-args:
+        description: "R expression for check-r-package `build_args` (R CMD build)."
+        type: string
+        default: '"--no-manual"'
+      install-spatial-deps:
+        description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (sf/terra/magick)."
+        type: boolean
+        default: false
+
+name: R-CMD-check (reusable)
+
+permissions: read-all
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: macos-latest, r: "release" }
+          - { os: windows-latest, r: "release" }
+          - { os: ubuntu-latest, r: "devel", http-user-agent: "release" }
+          - { os: ubuntu-latest, r: "release" }
+          - { os: ubuntu-latest, r: "oldrel-1" }
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      RGL_USE_NULL: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      - name: Install macOS system dependencies
+        if: ${{ inputs.install-spatial-deps && runner.os == 'macOS' }}
+        run: brew install gdal proj geos imagemagick
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: ${{ inputs.extra-packages }}
+          needs: check
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          build_args: ${{ inputs.build-args }}

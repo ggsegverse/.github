@@ -73,12 +73,19 @@ jobs:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
         run: |
           pr="${{ steps.cpr.outputs.pull-request-number }}"
+          repo="${{ github.repository }}"
+          branch="ci/update-codemeta"
+          # Merge via the REST endpoint, not `gh pr merge`: the GraphQL mutation
+          # behind `gh pr merge` does not honour the ggseg-bot ruleset bypass and
+          # is rejected with "base branch policy prohibits the merge". The REST
+          # merge endpoint honours the bypass_actor grant.
           for i in 1 2 3 4 5; do
-            if gh pr merge "$pr" --repo "${{ github.repository }}" --squash --delete-branch; then
+            if gh api -X PUT "repos/$repo/pulls/$pr/merge" -f merge_method=squash; then
               echo "merged codemeta PR #$pr"
+              gh api -X DELETE "repos/$repo/git/refs/heads/$branch" || true
               exit 0
             fi
-            echo "merge attempt $i not ready; waiting for mergeable state..."
+            echo "merge attempt $i not ready; retrying..."
             sleep 10
           done
           echo "::error::failed to merge codemeta PR #$pr"

@@ -85,13 +85,16 @@ jobs:
       - name: Check Good Practice
         id: gp
         run: |
-          # All goodpractice + tidyverse checks gate this job. Only
-          # strings_as_factors_linter is excluded: the packages Depend on
-          # R (>= 4.1.0), where stringsAsFactors already defaults to FALSE,
-          # so its pre-4.0 concern does not apply.
+          # All goodpractice + tidyverse checks gate this job, minus two:
+          #  * strings_as_factors_linter: packages Depend on R (>= 4.1.0),
+          #    where stringsAsFactors already defaults to FALSE.
+          #  * tidyverse_r_file_names: rejects hyphens ("[A-Z]|[- ]"), which
+          #    wrongly fails kebab-case file names. The tidyverse style guide
+          #    permits kebab-case; this is a goodpractice bug. Temporary until
+          #    the check is fixed upstream to allow kebab-case.
           checks <- setdiff(
             union(goodpractice::all_checks(), goodpractice::tidyverse_checks()),
-            "lintr_strings_as_factors_linter"
+            c("lintr_strings_as_factors_linter", "tidyverse_r_file_names")
           )
 
           gp_result <- goodpractice::gp(checks = checks)

@@ -1,0 +1,140 @@
+# Reusable: air format check + lintr + goodpractice, hard-failing on any
+# violation. Triggers (push / pull_request) live in each package's caller stub.
+on:
+  workflow_call:
+    inputs:
+      extra-packages:
+        description: "Extra packages appended to the lint/gp `local::.` install (e.g. a github:: source dep)."
+        type: string
+        default: ""
+      install-spatial-deps:
+        description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (needed to build local::. for sf/terra pkgs)."
+        type: boolean
+        default: false
+      goodpractice:
+        description: "Run the goodpractice job. Set false for template packages with no R/ or man/."
+        type: boolean
+        default: true
+
+name: code-quality (reusable)
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check tidyverse style
+        uses: posit-dev/setup-air@v1
+      - run: air format --check .
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::lintr, local::.${{ inputs.extra-packages != '' && format(', {0}', inputs.extra-packages) || '' }}
+          needs: lint
+
+      - name: Lint
+        run: lintr::lint_package()
+        shell: Rscript {0}
+        env:
+          LINTR_ERROR_ON_LINT: true
+
+  good-practice:
+    if: ${{ inputs.goodpractice }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      _R_CHECK_FORCE_SUGGESTS_: false
+      _R_CHECK_RD_XREFS_: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-tinytex@v2
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::goodpractice, local::.${{ inputs.extra-packages != '' && format(', {0}', inputs.extra-packages) || '' }}
+          needs: gp
+
+      - name: Check Good Practice
+        id: gp
+        run: |
+          # All goodpractice + tidyverse checks gate this job. Only
+          # strings_as_factors_linter is excluded: the packages Depend on
+          # R (>= 4.1.0), where stringsAsFactors already defaults to FALSE,
+          # so its pre-4.0 concern does not apply.
+          checks <- setdiff(
+            union(goodpractice::all_checks(), goodpractice::tidyverse_checks()),
+            "lintr_strings_as_factors_linter"
+          )
+
+          gp_result <- goodpractice::gp(checks = checks)
+
+          writeLines(capture.output(print(gp_result)), "gp-results.txt")
+          failed <- goodpractice::failed_checks(gp_result)
+          status <- if (length(failed) == 0) "success" else "failure"
+          cat(
+            sprintf("status=%s\n", status),
+            file = Sys.getenv("GITHUB_OUTPUT"),
+            append = TRUE
+          )
+        shell: Rscript {0}
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.gp.outputs.status == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('gp-results.txt', 'utf8');
+
+            const body = `⚠️ **Good Practice Check: Some checks need attention**
+
+            <details>
+            <summary>Click to see full results</summary>
+
+            \`\`\`
+            ${results}
+            \`\`\`
+
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Enforce good practice
+        if: steps.gp.outputs.status == 'failure'
+        run: |
+          echo "::error::goodpractice checks failed — see gp-results above."
+          cat gp-results.txt
+          exit 1

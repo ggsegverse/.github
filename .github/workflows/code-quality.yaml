@@ -134,31 +134,69 @@ jobs:
           )
         shell: Rscript {0}
 
+      # Sticky comment: one comment per PR, updated in place each run (never a
+      # new comment). Identified by the hidden marker below. On success an
+      # existing failure comment is flipped to the passing state; if none
+      # exists on success, nothing is posted.
       - name: Comment on PR
-        if: github.event_name == 'pull_request' && steps.gp.outputs.status == 'failure'
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
+        env:
+          GP_STATUS: ${{ steps.gp.outputs.status }}
         with:
           script: |
             const fs = require('fs');
-            const results = fs.readFileSync('gp-results.txt', 'utf8');
+            const marker = '<!-- good-practice-check -->';
+            const status = process.env.GP_STATUS;
 
-            const body = `⚠️ **Good Practice Check: Some checks need attention**
+            let body;
+            if (status === 'failure') {
+              const results = fs.readFileSync('gp-results.txt', 'utf8');
+              body = [
+                marker,
+                '⚠️ **Good Practice Check: Some checks need attention**',
+                '',
+                '<details>',
+                '<summary>Click to see full results</summary>',
+                '',
+                '```',
+                results,
+                '```',
+                '',
+                '</details>',
+              ].join('\n');
+            } else {
+              body = `${marker}\n✅ **Good Practice Check: All checks passed.**`;
+            }
 
-            <details>
-            <summary>Click to see full results</summary>
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              }
+            );
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes(marker)
+            );
 
-            \`\`\`
-            ${results}
-            \`\`\`
-
-            </details>`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else if (status === 'failure') {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body,
+              });
+            }
 
       - name: Enforce good practice
         if: steps.gp.outputs.status == 'failure'

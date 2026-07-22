@@ -118,15 +118,64 @@ jobs:
               "lintr_scalar_in_linter",
               "lintr_unnecessary_lambda_linter",
               "urlchecker_ok",
-              "urlchecker_no_redirects"
+              "urlchecker_no_redirects",
+              # The following are not false positives, but checks deliberately
+              # left off the hard gate because they are covered elsewhere or are
+              # subjective rather than correctness signals:
+              #  * covr: coverage is already gated by the dedicated
+              #    test-coverage job + Codecov. Hard-failing here on anything
+              #    below 100% duplicates that job and blocks on unreachable
+              #    defensive branches.
+              #  * complexity_function_length: flags functions past a fixed line
+              #    threshold. Length is not a correctness signal, and
+              #    render/layout functions are legitimately long; splitting them
+              #    purely to satisfy the metric adds risk, not value.
+              #  * tidyverse_test_file_names: expects a test-<file>.R for every
+              #    R/ file, which false-positives on files holding no testable
+              #    code (e.g. <pkg>-package.R doc stubs, re-export shims).
+              "covr",
+              "complexity_function_length",
+              "tidyverse_test_file_names"
             )
           )
 
           gp_result <- goodpractice::gp(checks = checks)
-
-          writeLines(capture.output(print(gp_result)), "gp-results.txt")
           failed <- goodpractice::failed_checks(gp_result)
           status <- if (length(failed) == 0) "success" else "failure"
+
+          # goodpractice 1.1.0's print() emits no advice text for most checks,
+          # so build an explicit report of the failed check ids + positions
+          # instead of relying on capture.output(print(gp_result)).
+          if (length(failed) == 0) {
+            report <- "All goodpractice checks passed."
+          } else {
+            report <- c(
+              sprintf("%d goodpractice check(s) failed:", length(failed)),
+              ""
+            )
+            for (nm in failed) {
+              report <- c(report, paste0("- ", nm))
+              pos <- tryCatch(
+                gp_result$checks[[nm]]$positions,
+                error = function(e) NULL
+              )
+              n <- length(pos)
+              for (i in seq_len(min(n, 15L))) {
+                p <- pos[[i]]
+                label <- names(pos)[i]
+                if (is.list(p) && !is.null(p$filename)) {
+                  ln <- if (!is.null(p$line_number)) p$line_number else ""
+                  report <- c(report, sprintf("    %s:%s", p$filename, ln))
+                } else if (!is.null(label) && nzchar(label)) {
+                  report <- c(report, sprintf("    %s", label))
+                }
+              }
+              if (n > 15L) {
+                report <- c(report, sprintf("    ... and %d more", n - 15L))
+              }
+            }
+          }
+          writeLines(report, "gp-results.txt")
           cat(
             sprintf("status=%s\n", status),
             file = Sys.getenv("GITHUB_OUTPUT"),

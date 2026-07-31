@@ -1,8 +1,16 @@
-# Reusable: render README.Rmd via Quarto and commit the result on the
-# default branch. Called by each package via a thin caller stub that
-# triggers on pushes/PRs touching README.Rmd.
+# Reusable: render the package README via Quarto and commit the result on
+# the default branch. Called by each package via a thin caller stub that
+# triggers on pushes/PRs touching the README source.
+#
+# `readme-file` defaults to README.Rmd. The ggseg atlas packages author their
+# README as README.qmd, so their caller stubs pass that instead.
 on:
   workflow_call:
+    inputs:
+      readme-file:
+        description: "README source to render (e.g. README.Rmd or README.qmd)."
+        type: string
+        default: "README.Rmd"
 
 name: render-readme (reusable)
 
@@ -32,12 +40,21 @@ jobs:
       - uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Render README
-        run: quarto render README.Rmd
+        run: quarto render "${{ inputs.readme-file }}"
 
       - name: Commit and push
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md man/figures/README-*
-          git diff --staged --quiet || git commit -m "Re-render README.Rmd" && git push
+          git add README.md
+          # A README whose plotting chunks are eval:false produces no figures,
+          # so man/figures/ may legitimately not exist. A bare glob aborts the
+          # step with "pathspec did not match any files".
+          if [ -d man/figures ]; then
+            git add man/figures
+          fi
+          git diff --staged --quiet || {
+            git commit -m "Re-render ${{ inputs.readme-file }}"
+            git push
+          }

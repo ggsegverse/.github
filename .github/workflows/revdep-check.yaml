@@ -78,12 +78,15 @@ jobs:
           remotes::install_deps("revdep", dependencies = TRUE, upgrade = "never")
         shell: Rscript {0}
 
-      - name: R CMD check the reverse dependency
+      - name: R CMD check the reverse dependency (CRAN rules)
+        # Raw R CMD check (not rcmdcheck) so NOT_CRAN stays UNSET and
+        # skip_on_cran() fires. Geometry-snapshot tests legitimately track one
+        # ggseg.formats build, so they would false-fail here against a changed
+        # upstream; skipping them (as CRAN does) leaves the check focused on
+        # real reverse-dependency breakage. Exits non-zero on ERROR.
+        working-directory: revdep
         run: |
-          res <- rcmdcheck::rcmdcheck(
-            "revdep",
-            args = c("--no-manual", "--ignore-vignettes"),
-            build_args = c("--no-manual", "--no-build-vignettes"),
-            error_on = "error"
-          )
-        shell: Rscript {0}
+          pkg=$(grep -m1 '^Package:' DESCRIPTION | awk '{print $2}')
+          ver=$(grep -m1 '^Version:' DESCRIPTION | awk '{print $2}')
+          R CMD build --no-build-vignettes --no-manual .
+          R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"

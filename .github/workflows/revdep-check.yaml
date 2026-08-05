@@ -94,4 +94,4 @@ jobs:
           pkg=$(grep -m1 '^Package:' DESCRIPTION | awk '{print $2}')
           ver=$(grep -m1 '^Version:' DESCRIPTION | awk '{print $2}')
           R CMD build --no-build-vignettes --no-manual .
-          R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"
+          NOT_CRAN=false R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"

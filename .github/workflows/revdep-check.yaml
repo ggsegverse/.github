@@ -1,0 +1,92 @@
+# Reusable: reverse-dependency check. Installs the caller package from source
+# (the version being prepared for release) and runs R CMD check on each named
+# downstream ggsegverse package against it, so a breaking change is caught
+# before a release is cut. Run this before minting a release version.
+#
+# Each downstream package is checked with the local (under-release) package
+# already installed, so its own `Remotes` still resolve other ggsegverse
+# dependencies from GitHub (dev-against-dev), matching how r-universe builds.
+on:
+  workflow_call:
+    inputs:
+      revdeps:
+        description: >
+          JSON array of downstream repositories (owner/repo) to check against
+          this package, e.g. '["ggsegverse/ggseg","ggsegverse/ggseg3d"]'.
+        type: string
+        required: true
+      install-spatial-deps:
+        description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (sf/terra/magick)."
+        type: boolean
+        default: true
+
+name: revdep-check (reusable)
+
+permissions: read-all
+
+jobs:
+  revdep:
+    runs-on: ubuntu-latest
+
+    name: revdep ${{ matrix.revdep }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        revdep: ${{ fromJSON(inputs.revdeps) }}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      RGL_USE_NULL: true
+
+    steps:
+      - name: Check out the package under release
+        uses: actions/checkout@v6
+        with:
+          path: package
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - name: Install the package under release + tooling
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: package
+          extra-packages: any::rcmdcheck any::remotes local::.
+
+      - name: Check out the reverse dependency
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.revdep }}
+          path: revdep
+
+      - name: Install reverse-dependency dependencies
+        # upgrade = "never" keeps the under-release package installed above,
+        # so the revdep is checked against it rather than the CRAN/r-universe
+        # version. The revdep's own Remotes still resolve from GitHub.
+        run: |
+          remotes::install_deps("revdep", dependencies = TRUE, upgrade = "never")
+        shell: Rscript {0}
+
+      - name: R CMD check the reverse dependency (CRAN rules)
+        # Raw R CMD check (not rcmdcheck) so NOT_CRAN stays UNSET and
+        # skip_on_cran() fires. Geometry-snapshot tests legitimately track one
+        # ggseg.formats build, so they would false-fail here against a changed
+        # upstream; skipping them (as CRAN does) leaves the check focused on
+        # real reverse-dependency breakage. Exits non-zero on ERROR.
+        working-directory: revdep
+        run: |
+          pkg=$(grep -m1 '^Package:' DESCRIPTION | awk '{print $2}')
+          ver=$(grep -m1 '^Version:' DESCRIPTION | awk '{print $2}')
+          R CMD build --no-build-vignettes --no-manual .
+          R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"

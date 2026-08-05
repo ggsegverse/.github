@@ -1,0 +1,87 @@
+# Reusable: verify the caller package passes `R CMD check` under CRAN rules
+# against BOTH the released (CRAN) and the development ggseg.formats.
+#
+# Why this exists separately from R-CMD-check.yaml:
+#   - The bundled ggseg.formats atlases change geometry between releases (dk
+#     polygons simplified, aseg meshes decimated), so the geometry-snapshot
+#     tests (vdiffr / widget summaries) are `skip_on_cran()`-guarded and track
+#     whichever ggseg.formats the normal CI installs. They run in full on the
+#     regular multi-OS check.
+#   - CRAN, however, runs only the reduced set (skip_on_cran active). For ggseg
+#     / ggseg3d to be releasable independently of ggseg.formats, that reduced
+#     set must pass under the *current* CRAN ggseg.formats AND the *next* one.
+#
+# This job runs `R CMD check` with NOT_CRAN left UNSET (so skip_on_cran() fires,
+# matching CRAN), once per ggseg.formats source. A regression that only shows up
+# against the development schema fails here before either package is submitted.
+on:
+  workflow_call:
+    inputs:
+      dev-formats-repo:
+        description: "owner/repo (optionally @ref) of the development ggseg.formats to test against."
+        type: string
+        default: "ggsegverse/ggseg.formats"
+      install-spatial-deps:
+        description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (sf/terra/magick)."
+        type: boolean
+        default: true
+
+name: formats-compat (reusable)
+
+permissions: read-all
+
+jobs:
+  formats-compat:
+    runs-on: ubuntu-latest
+
+    name: ggseg.formats-${{ matrix.formats }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        formats: [released, devel]
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      RGL_USE_NULL: true
+      # NOT_CRAN is intentionally left UNSET so skip_on_cran() fires and this
+      # checks the same reduced test set CRAN runs.
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      - name: Install development ggseg.formats
+        if: matrix.formats == 'devel'
+        run: pak::pak("${{ inputs.dev-formats-repo }}")
+        shell: Rscript {0}
+
+      - name: ggseg.formats version under test
+        run: Rscript -e 'cat("ggseg.formats:", as.character(packageVersion("ggseg.formats")), "\n")'
+
+      - name: R CMD check under CRAN rules
+        # Raw R CMD check (not the r-lib action / rcmdcheck) so NOT_CRAN stays
+        # unset and skip_on_cran() actually fires. Exits non-zero on ERROR
+        # (e.g. a test failure), which is the dual-compat signal we gate on.
+        run: |
+          pkg=$(grep -m1 '^Package:' DESCRIPTION | awk '{print $2}')
+          ver=$(grep -m1 '^Version:' DESCRIPTION | awk '{print $2}')
+          R CMD build --no-build-vignettes --no-manual .
+          R CMD check --as-cran --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"

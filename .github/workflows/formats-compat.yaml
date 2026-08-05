@@ -45,8 +45,11 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       RGL_USE_NULL: true
-      # NOT_CRAN is intentionally left UNSET so skip_on_cran() fires and this
-      # checks the same reduced test set CRAN runs.
+      # Force CRAN rules so skip_on_cran() fires and this checks the same
+      # reduced test set CRAN runs. `r-lib/actions/setup-r` exports
+      # NOT_CRAN=true, so raw `R CMD check` would otherwise run everything;
+      # override it back to CRAN behaviour here.
+      NOT_CRAN: "false"
 
     steps:
       - uses: actions/checkout@v6

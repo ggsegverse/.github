@@ -15,6 +15,10 @@ on:
         description: "Run the goodpractice job. Set false for template packages with no R/ or man/."
         type: boolean
         default: true
+      max-tarball-mb:
+        description: "Warn if the built source tarball exceeds this many MB. CRAN's limit is 5. Leave at 0 (disabled) for r-universe-only packages such as the atlases, which deliberately ship larger geometry."
+        type: number
+        default: 0
 
 name: code-quality (reusable)
 
@@ -253,3 +257,86 @@ jobs:
           echo "::error::goodpractice checks failed — see gp-results above."
           cat gp-results.txt
           exit 1
+
+  tarball-size:
+    # Opt-in, because only the CRAN-bound packages are bound by the 5 MB limit;
+    # the atlas packages ship to r-universe and are deliberately larger.
+    #
+    # This exists because `R CMD check` cannot see the problem: it reports
+    # `checking installed package size ... OK` since tests/ and the source
+    # tarball are not what it measures. Three packages in this ecosystem have
+    # passed a clean 0/0/0 check while being unsubmittable -- vignette figures
+    # paid for twice, a 215 MB revdep/ directory swept into the build, and
+    # vdiffr baselines growing past the limit. CRAN rejects at submission,
+    # which is the slowest possible moment to find out.
+    #
+    # Warns rather than fails: going over is a judgement call (a package may
+    # legitimately ship large data) and a red build would force a decision that
+    # belongs to the maintainer. The job summary carries the size and the ten
+    # largest files so the warning is actionable without a local rebuild.
+    if: ${{ inputs.max-tarball-mb > 0 }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Vignettes are built by `R CMD build` and are often a large share of the
+      # tarball, so they must be built for the measurement to be truthful.
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install Linux system dependencies
+        if: ${{ inputs.install-spatial-deps }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: local::.${{ inputs.extra-packages != '' && format(', {0}', inputs.extra-packages) || '' }}
+          needs: build
+
+      - name: Build source tarball
+        run: R CMD build .
+
+      - name: Check tarball size against the CRAN limit
+        run: |
+          set -euo pipefail
+          tarball=$(ls -1 ./*.tar.gz | head -n1)
+          bytes=$(stat -c%s "$tarball")
+          limit=$(( ${{ inputs.max-tarball-mb }} * 1000000 ))
+          human() { awk -v b="$1" 'BEGIN { printf "%.2f MB", b / 1000000 }'; }
+
+          {
+            echo "### Source tarball size"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| tarball | \`$(basename "$tarball")\` |"
+            echo "| size | $(human "$bytes") |"
+            echo "| limit | $(human "$limit") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Largest entries, so a failure is diagnosable without a local rebuild.
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>10 largest files</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Size column differs between GNU tar ($3) and BSD tar ($5), so take
+          # the first wholly-numeric field from position 3 on.
+          tar tzvf "$tarball" \
+            | awk '{ for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+$/) { print $i, $NF; break } }' \
+            | sort -rn | awk '{ printf "%8.1f KB  %s\n", $1 / 1024, $2 }' \
+            | head -10 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$bytes" -gt "$limit" ]; then
+            echo "::warning title=Tarball over the CRAN limit::$(human "$bytes") exceeds $(human "$limit"). CRAN would reject this at submission; see the job summary for the largest files. Not failing the build -- shipping over the limit is a judgement call, not a correctness error."
+          else
+            echo "Tarball $(human "$bytes") is within the $(human "$limit") limit."
+          fi

@@ -3,6 +3,15 @@
 on:
   workflow_call:
     inputs:
+      extra-repositories:
+        description: >
+          Extra CRAN-like repositories prepended to `repos` before dependency resolution,
+          e.g. `https://ggsegverse.r-universe.dev`. Empty by default, so resolution is
+          CRAN/RSPM only. Set it only while a DESCRIPTION floor names an unreleased
+          sibling, and clear it before CRAN submission — otherwise CI resolves dev
+          siblings and genuine CRAN-compatibility breakage goes unnoticed.
+        type: string
+        default: ""
       extra-packages:
         description: "Extra packages appended to the lint/gp `local::.` install (e.g. a github:: source dep)."
         type: string
@@ -36,6 +45,7 @@ jobs:
 
       - uses: r-lib/actions/setup-r@v2
         with:
+          extra-repositories: ${{ inputs.extra-repositories }}
           use-public-rspm: true
 
       - name: Install Linux system dependencies
@@ -67,6 +77,7 @@ jobs:
 
       - uses: r-lib/actions/setup-r@v2
         with:
+          extra-repositories: ${{ inputs.extra-repositories }}
           use-public-rspm: true
 
       - uses: r-lib/actions/setup-tinytex@v2

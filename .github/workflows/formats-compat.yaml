@@ -25,6 +25,14 @@ on:
         description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (sf/terra/magick)."
         type: boolean
         default: true
+      devel-extra-repositories:
+        description: >
+          CRAN-like repositories added to `repos` for the **devel** leg only, so a
+          DESCRIPTION floor naming an unreleased sibling can be resolved. Never applied
+          to the released leg, which must resolve against CRAN alone or the comparison
+          is meaningless.
+        type: string
+        default: "https://ggsegverse.r-universe.dev"
 
 name: formats-compat (reusable)
 
@@ -54,32 +62,68 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The released leg is only meaningful when DESCRIPTION's ggseg.formats floor
+      # can actually be met by the version on CRAN. While the floor names a dev
+      # version (x.y.z.9xxx) there is no released configuration to test, so that leg
+      # is skipped with an explanation instead of failing at dependency resolution.
+      - name: Decide whether this leg is testable
+        id: gate
+        run: |
+          floor=$(grep -oE 'ggseg\.formats \(>= [^)]+\)' DESCRIPTION | grep -oE '[0-9][0-9.]*' | head -1)
+          echo "floor=${floor:-none}" >> "$GITHUB_OUTPUT"
+          dev=false
+          case "$floor" in *.9[0-9][0-9][0-9]) dev=true ;; esac
+          if [ "${{ matrix.formats }}" = "released" ] && [ "$dev" = "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### formats-compat: released leg skipped"
+              echo
+              echo "DESCRIPTION floors \`ggseg.formats (>= $floor)\`, a development version."
+              echo "No released ggseg.formats satisfies it, so there is no released"
+              echo "configuration to check. This leg becomes meaningful again when the"
+              echo "floor moves to a released version at submission time."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: r-lib/actions/setup-pandoc@v2
+        if: steps.gate.outputs.run == 'true'
 
       - uses: r-lib/actions/setup-r@v2
+        if: steps.gate.outputs.run == 'true'
         with:
           use-public-rspm: true
+          # Devel leg only. The released leg must see CRAN alone.
+          extra-repositories: ${{ matrix.formats == 'devel' && inputs.devel-extra-repositories || '' }}
 
       - name: Install Linux system dependencies
-        if: ${{ inputs.install-spatial-deps }}
+        if: ${{ steps.gate.outputs.run == 'true' && inputs.install-spatial-deps }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
 
+      # Must precede dependency resolution: pak resolves the DESCRIPTION floor, and
+      # on the devel leg only the development ggseg.formats can satisfy it. Running
+      # this afterwards (as it used to) meant resolution failed before the step that
+      # would have satisfied it ever ran.
+      - name: Install development ggseg.formats
+        if: ${{ steps.gate.outputs.run == 'true' && matrix.formats == 'devel' }}
+        run: pak::pak("${{ inputs.dev-formats-repo }}")
+        shell: Rscript {0}
+
       - uses: r-lib/actions/setup-r-dependencies@v2
+        if: steps.gate.outputs.run == 'true'
         with:
           extra-packages: any::rcmdcheck
           needs: check
 
-      - name: Install development ggseg.formats
-        if: matrix.formats == 'devel'
-        run: pak::pak("${{ inputs.dev-formats-repo }}")
-        shell: Rscript {0}
-
       - name: ggseg.formats version under test
+        if: steps.gate.outputs.run == 'true'
         run: Rscript -e 'cat("ggseg.formats:", as.character(packageVersion("ggseg.formats")), "\n")'
 
       - name: R CMD check under CRAN rules
+        if: steps.gate.outputs.run == 'true'
         # Raw R CMD check (not the r-lib action / rcmdcheck) so NOT_CRAN stays
         # unset and skip_on_cran() actually fires. Exits non-zero on ERROR
         # (e.g. a test failure), which is the dual-compat signal we gate on.

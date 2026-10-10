@@ -14,9 +14,30 @@
 # This job runs `R CMD check` with NOT_CRAN left UNSET (so skip_on_cran() fires,
 # matching CRAN), once per ggseg.formats source. A regression that only shows up
 # against the development schema fails here before either package is submitted.
+#
+# While a caller's DESCRIPTION floor names an unreleased ggseg.formats, the two
+# legs behave differently on purpose:
+#   - devel resolves with `extra-repositories` prepended, so the floor is
+#     satisfiable and the leg actually runs. Without it, resolution dies at
+#     setup-r-dependencies before the dev install step below is ever reached --
+#     so the leg reported nothing in exactly the release cycle it exists for.
+#   - released stays CRAN/RSPM only, because "does the CRAN ggseg.formats still
+#     work" is the whole question. A floor naming an unreleased sibling is
+#     therefore unresolvable here, and this leg is red until that floor flips to
+#     a version CRAN serves. That red is the submission gate doing its job, not
+#     a regression.
 on:
   workflow_call:
     inputs:
+      extra-repositories:
+        description: >
+          Extra CRAN-like repositories prepended to `repos` before dependency resolution,
+          e.g. `https://ggsegverse.r-universe.dev`. Applied to the `devel` leg only, so the
+          `released` leg cannot silently resolve a development ggseg.formats and stop
+          testing CRAN compatibility. Empty by default. Set it only while a DESCRIPTION
+          floor names an unreleased sibling, and clear it before submission.
+        type: string
+        default: ""
       dev-formats-repo:
         description: "owner/repo (optionally @ref) of the development ggseg.formats to test against."
         type: string
@@ -59,6 +80,7 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+          extra-repositories: ${{ matrix.formats == 'devel' && inputs.extra-repositories || '' }}
 
       - name: Install Linux system dependencies
         if: ${{ inputs.install-spatial-deps }}

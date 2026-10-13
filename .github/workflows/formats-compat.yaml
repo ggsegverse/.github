@@ -103,20 +103,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
 
-      # Must precede dependency resolution: pak resolves the DESCRIPTION floor, and
-      # on the devel leg only the development ggseg.formats can satisfy it. Running
-      # this afterwards (as it used to) meant resolution failed before the step that
-      # would have satisfied it ever ran.
-      - name: Install development ggseg.formats
-        if: ${{ steps.gate.outputs.run == 'true' && matrix.formats == 'devel' }}
-        run: pak::pak("${{ inputs.dev-formats-repo }}")
-        shell: Rscript {0}
-
       - uses: r-lib/actions/setup-r-dependencies@v2
         if: steps.gate.outputs.run == 'true'
         with:
           extra-packages: any::rcmdcheck
           needs: check
+
+      # After dependency resolution, not before: this step needs pak, and
+      # setup-r-dependencies is what installs it. Resolution satisfies the
+      # DESCRIPTION floor from the devel leg's extra-repositories above, so it
+      # no longer needs this step to have run first; this then upgrades
+      # ggseg.formats to the development source itself.
+      - name: Install development ggseg.formats
+        if: ${{ steps.gate.outputs.run == 'true' && matrix.formats == 'devel' }}
+        run: pak::pak("${{ inputs.dev-formats-repo }}")
+        shell: Rscript {0}
 
       - name: ggseg.formats version under test
         if: steps.gate.outputs.run == 'true'

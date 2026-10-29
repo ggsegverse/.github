@@ -73,11 +73,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
 
-      - name: Install the package under release + tooling
+      - name: Install the package's dependencies + tooling
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: package
-          extra-packages: any::rcmdcheck any::remotes local::.
+          extra-packages: any::rcmdcheck any::remotes
+
+      - name: Install the package under release
+        # Installed with R CMD INSTALL rather than as `local::.` above.
+        # `local::.` records a local remote whose path is relative to the
+        # working-directory it was installed from, so a later
+        # remotes::install_deps() run from the workspace root resolves it as
+        # ./DESCRIPTION, which does not exist there, and dies with
+        #   read.dcf(path) : cannot open the connection
+        # in remote_sha.local_remote(). R CMD INSTALL records no remote, so
+        # the revdep's own dependency resolution is unaffected.
+        run: R CMD INSTALL package
 
       - name: Check out the reverse dependency
         uses: actions/checkout@v6

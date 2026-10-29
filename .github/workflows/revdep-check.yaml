@@ -28,6 +28,18 @@ on:
         description: "Install GDAL/PROJ/GEOS/udunits/magick/glpk/harfbuzz system libraries (sf/terra/magick)."
         type: boolean
         default: true
+      cran-rules:
+        description: >
+          Run the revdeps under CRAN rules, so skip_on_cran() fires and
+          snapshot tests are skipped. True is the right default for the core
+          consumers, whose geometry snapshots track a single ggseg.formats
+          build and would false-fail against a changed upstream. Set false to
+          check callers whose snapshots are the point of the check — the atlas
+          packages, whose both-renderer tests are the only place one atlas is
+          driven through ggseg and ggseg3d. vdiffr passes cran = FALSE to
+          expect_snapshot_file(), so those tests run only when this is false.
+        type: boolean
+        default: true
 
 name: revdep-check (reusable)
 
@@ -48,11 +60,10 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       RGL_USE_NULL: true
-      # Force CRAN rules so skip_on_cran() fires: geometry snapshots track a
-      # single ggseg.formats build and must not false-fail the revdep against a
-      # changed upstream. `r-lib/actions/setup-r` exports NOT_CRAN=true, so
-      # override it back to CRAN behaviour here.
-      NOT_CRAN: "false"
+      # `r-lib/actions/setup-r` exports NOT_CRAN=true, so this overrides it.
+      # cran-rules: true  -> NOT_CRAN=false -> skip_on_cran() fires, snapshots skip.
+      # cran-rules: false -> NOT_CRAN=true  -> snapshots run and are the gate.
+      NOT_CRAN: ${{ inputs.cran-rules && 'false' || 'true' }}
 
     steps:
       - name: Check out the package under release
@@ -104,15 +115,16 @@ jobs:
           remotes::install_deps("revdep", dependencies = TRUE, upgrade = "never")
         shell: Rscript {0}
 
-      - name: R CMD check the reverse dependency (CRAN rules)
-        # Raw R CMD check (not rcmdcheck) so NOT_CRAN stays UNSET and
-        # skip_on_cran() fires. Geometry-snapshot tests legitimately track one
-        # ggseg.formats build, so they would false-fail here against a changed
-        # upstream; skipping them (as CRAN does) leaves the check focused on
-        # real reverse-dependency breakage. Exits non-zero on ERROR.
+      - name: R CMD check the reverse dependency
+        # Raw R CMD check (not rcmdcheck) so the NOT_CRAN set above is what
+        # decides whether skip_on_cran() fires. Restated inline because
+        # R CMD check does not reliably inherit it (#18) — but it must read the
+        # job env, not a literal. A hardcoded NOT_CRAN=false here would
+        # override cran-rules and make the opt-out inert while looking
+        # configured. Exits non-zero on ERROR.
         working-directory: revdep
         run: |
           pkg=$(grep -m1 '^Package:' DESCRIPTION | awk '{print $2}')
           ver=$(grep -m1 '^Version:' DESCRIPTION | awk '{print $2}')
           R CMD build --no-build-vignettes --no-manual .
-          NOT_CRAN=false R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"
+          NOT_CRAN="$NOT_CRAN" R CMD check --no-manual --ignore-vignettes "${pkg}_${ver}.tar.gz"

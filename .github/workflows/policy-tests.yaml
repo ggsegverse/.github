@@ -1,0 +1,33 @@
+# The risk-tier classifier and gate are policy, so they are unit tested here
+# rather than only being exercised by the pull requests they judge.
+on:
+  pull_request:
+    paths:
+      - bin/**
+      - .github/workflows/policy-tests.yaml
+  push:
+    branches: [main]
+    paths:
+      - bin/**
+  workflow_dispatch:
+
+name: policy-tests.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  policy-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: shellcheck
+        run: shellcheck --shell=sh bin/*.sh
+
+      - name: classify-risk
+        run: sh bin/test-classify-risk.sh
+
+      - name: check-tier-obligations
+        run: sh bin/test-check-tier-obligations.sh

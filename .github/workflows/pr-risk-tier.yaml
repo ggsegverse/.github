@@ -1,0 +1,180 @@
+# Reusable: classify a pull request into a risk tier from the paths it changes,
+# label it, explain the classification in a sticky comment, and gate the merge on
+# the obligations that tier carries.
+#
+# No LLM calls: this is deterministic policy. Review itself runs locally via the
+# pre-merge-review skill before the PR is opened. Because the ggseg-bot token is
+# minted from org secrets rather than read from the workflow's GITHUB_TOKEN, the
+# gate also works on pull requests from forks, where GITHUB_TOKEN is read-only.
+#
+# The classification and gate logic live in bin/ in this repository so they can be
+# unit tested (bin/test-*.sh) instead of only in CI.
+#
+# Policy: RISK_TIERS.md   Revert paths: ROLLBACK.md
+# Called by each package via a thin caller stub triggering on pull_request.
+on:
+  workflow_call:
+    inputs:
+      extra-t2-paths:
+        description: >
+          Newline-separated extra path globs that force tier T2 for this package,
+          e.g. 'R/atlas-registry.R' or 'inst/atlases/**'.
+        type: string
+        required: false
+        default: ""
+      require-revdep:
+        description: >
+          Require a successful revdep-check or ecosystem-check run on the head SHA
+          before a T2 pull request may merge.
+        type: boolean
+        default: true
+
+name: pr-risk-tier (reusable)
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  risk-tier:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Mint ggseg-bot token
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GGSEG_BOT_APP_ID }}
+          private-key: ${{ secrets.GGSEG_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Check out policy scripts
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/.github
+          sparse-checkout: bin
+          sparse-checkout-cone-mode: false
+          path: .ggseg-policy
+          token: ${{ steps.bot.outputs.token }}
+
+      - name: Collect the diff
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          gh api --paginate "repos/$REPO/pulls/$PR/files" -q '.[].filename' > paths.txt
+          gh pr diff "$PR" --repo "$REPO" > pr.patch || : > pr.patch
+          echo "changed files:"
+          cat paths.txt
+
+      - name: Classify risk tier
+        id: classify
+        env:
+          EXTRA_T2: ${{ inputs.extra-t2-paths }}
+        run: |
+          set -eu
+          sh .ggseg-policy/bin/classify-risk.sh paths.txt pr.patch | tee "$GITHUB_OUTPUT"
+          printf 'n_files=%s\n' "$(wc -l < paths.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Apply risk label
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TIER: ${{ steps.classify.outputs.tier }}
+        run: |
+          set -eu
+          for t in 0 1 2; do
+            case "$t" in
+              0) colour=0e8a16 ;;
+              1) colour=fbca04 ;;
+              2) colour=d93f0b ;;
+            esac
+            gh api "repos/$REPO/labels/risk%3AT$t" >/dev/null 2>&1 ||
+              gh api -X POST "repos/$REPO/labels" \
+                -f "name=risk:T$t" -f "color=$colour" \
+                -f "description=Risk tier T$t (see RISK_TIERS.md)" >/dev/null
+            if [ "$t" != "$TIER" ]; then
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/risk%3AT$t" >/dev/null 2>&1 || true
+            fi
+          done
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=risk:T$TIER" >/dev/null
+
+      - name: Resolve revdep status
+        id: revdep
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          # --slurp cannot be combined with -q, so page explicitly: a matrix
+          # revdep-check can easily push the run list past one page.
+          n=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+                -q '.check_runs[] | select(.name | test("revdep|ecosystem"; "i"))
+                     | select(.conclusion == "success") | .name' | wc -l | tr -d ' ')
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "green=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "green=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post or update the classification comment
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TIER: ${{ steps.classify.outputs.tier }}
+          N_FILES: ${{ steps.classify.outputs.n_files }}
+          REASONS: ${{ steps.classify.outputs.reasons }}
+        run: |
+          set -eu
+          marker="<!-- ggseg-bot:risk-tier -->"
+          case "$TIER" in
+            0) gate="Merges on green CI. No deliberate re-read required." ;;
+            1) gate="Green CI, plus a cold read of the diff with the PR description closed." ;;
+            2) gate="Green CI, a cold read, a green reverse-dependency check, and a soak on r-universe before CRAN." ;;
+          esac
+
+          {
+            printf '%s\n' "$marker"
+            printf '### Risk tier: **T%s**\n\n' "$TIER"
+            printf '%s file(s) changed. What set the tier:\n\n' "$N_FILES"
+            printf '%s\n' "$REASONS"
+            printf '**Gate:** %s\n\n' "$gate"
+            printf '<sub>Computed from changed paths, not from the tier ticked in the description. '
+            printf 'Policy: [RISK_TIERS.md](https://github.com/ggsegverse/.github/blob/main/RISK_TIERS.md) · '
+            printf 'Revert paths: [ROLLBACK.md](https://github.com/ggsegverse/.github/blob/main/ROLLBACK.md)</sub>\n'
+          } > body.md
+
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                 -q "[.[] | select(.body | contains(\"$marker\")) | .id] | first // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@body.md >/dev/null
+            echo "updated comment $id"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@body.md >/dev/null
+            echo "posted new comment"
+          fi
+
+      - name: Gate on tier obligations
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TIER: ${{ steps.classify.outputs.tier }}
+          REVDEP_GREEN: ${{ steps.revdep.outputs.green }}
+          REQUIRE_REVDEP: ${{ inputs.require-revdep }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -eu
+          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'risk-override'; then
+            echo "::warning::risk-override label present; skipping tier obligations."
+            exit 0
+          fi
+          green="$REVDEP_GREEN"
+          [ "$REQUIRE_REVDEP" = "true" ] || green=1
+          gh api "repos/$REPO/pulls/$PR" -q '.body // ""' > body.txt
+          sh .ggseg-policy/bin/check-tier-obligations.sh body.txt "$TIER" "$green" "$HEAD_REF"

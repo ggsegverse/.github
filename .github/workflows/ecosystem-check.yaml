@@ -1,0 +1,203 @@
+# Reusable: drive one atlas through the whole suite in a single process.
+#
+# Every package's own R CMD check proves that package works alone. Nothing
+# proved that the suite still works together, so a change could break 2D
+# rendering with every gate green. This installs ggseg.formats, ggseg, ggseg3d,
+# ggseg.extra and ggsegverse in dependency order and runs
+# bin/ecosystem-smoke.R, which renders one atlas through both backends and
+# asserts they paint the same number of distinct colours.
+#
+# The caller is checked out at its pull-request ref; every other package comes
+# from main. So whichever repo calls this, the suite is built around *that*
+# repo's proposed change. `github.repository` inside a reusable workflow is the
+# caller, which is what makes the per-repo ref selection below work with no
+# input.
+#
+# The check-run name must keep matching /revdep|ecosystem/i: that is how
+# bin/check-tier-obligations.sh resolves the T2 reverse-dependency obligation.
+# Rename this job and every T2 pull request in every repo silently loses its
+# only satisfiable gate.
+on:
+  workflow_call:
+
+name: ecosystem-check (reusable)
+
+permissions:
+  contents: read
+
+jobs:
+  ecosystem-smoke:
+    runs-on: ubuntu-latest
+    name: ecosystem smoke (cross-package)
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      RGL_USE_NULL: true
+
+    steps:
+      - name: Check out ggseg.formats
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/ggseg.formats
+          ref: ${{ github.repository == 'ggsegverse/ggseg.formats' && (github.event.pull_request.head.sha || github.sha) || 'main' }}
+          path: ggseg.formats
+
+      - name: Check out ggseg
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/ggseg
+          ref: ${{ github.repository == 'ggsegverse/ggseg' && (github.event.pull_request.head.sha || github.sha) || 'main' }}
+          path: ggseg
+
+      - name: Check out ggseg3d
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/ggseg3d
+          ref: ${{ github.repository == 'ggsegverse/ggseg3d' && (github.event.pull_request.head.sha || github.sha) || 'main' }}
+          path: ggseg3d
+
+      - name: Check out ggseg.extra
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/ggseg.extra
+          ref: ${{ github.repository == 'ggsegverse/ggseg.extra' && (github.event.pull_request.head.sha || github.sha) || 'main' }}
+          path: ggseg.extra
+
+      - name: Check out ggsegverse
+        uses: actions/checkout@v6
+        with:
+          repository: ggsegverse/ggsegverse
+          ref: ${{ github.repository == 'ggsegverse/ggsegverse' && (github.event.pull_request.head.sha || github.sha) || 'main' }}
+          path: ggsegverse
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install pak
+        run: |
+          install.packages("pak", repos = sprintf("https://r-lib.github.io/p/pak/stable/%s/%s/%s", .Platform$pkgType, R.Version()$os, R.Version()$arch))
+        shell: Rscript {0}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev libgeos-dev libudunits2-dev libmagick++-dev libglpk-dev libharfbuzz-dev libfribidi-dev
+
+      - name: Install the freesurfer fork
+        # Unconditional, and must stay so. freesurfer is in ggseg.extra's
+        # Suggests, pak resolves Suggests under dependencies = TRUE, and the
+        # fork is not on CRAN — so skipping it makes installing ggseg.extra
+        # fail for every caller, including the ones that never touch the
+        # construction pipelines.
+        run: pak::pak("drmowinckels/freesurfer@refactor")
+        shell: Rscript {0}
+
+      - name: Install the suite in dependency order
+        run: |
+          for (pkg in c("ggseg.formats", "ggseg", "ggseg3d", "ggseg.extra", "ggsegverse")) {
+            pak::local_install_deps(pkg, dependencies = TRUE)
+            pak::local_install(pkg)
+          }
+        shell: Rscript {0}
+
+      - name: Drive one atlas through both renderers
+        # Inlined rather than checked out from bin/. A reusable workflow has no
+        # context giving the ref it was called at — github.job_workflow_sha is
+        # documented but resolves empty here, which was verified rather than
+        # assumed — so a separate checkout of the script can only take the
+        # default branch and may therefore come from a different commit than
+        # this file. Inlining makes the workflow and the code it runs the same
+        # commit by construction.
+        shell: Rscript {0}
+        run: |
+          # Cross-package gate: one atlas object has to survive the whole chain.
+          #
+          # Each package's own R CMD check proves that package works in isolation. None
+          # of them proves that an atlas still renders in both ggseg and ggseg3d once
+          # the package under test is the one from a pull request, because nothing drives
+          # the suite in a single process. That is the gap this script closes, and it is
+          # why it asserts region coverage rather than merely that a plot object was
+          # returned: a renderer that silently drops regions returns a perfectly valid
+          # object and passes every check its own package runs.
+          #
+          # Shared by every ggsegverse repo through the reusable ecosystem-check
+          # workflow, which checks the caller out at its pull-request ref and the rest at
+          # main. Run from the directory holding the checked-out package trees.
+
+          suppressPackageStartupMessages({
+            library(ggseg.formats)
+            library(ggseg.extra)
+            library(ggseg)
+            library(ggseg3d)
+            library(ggplot2)
+          })
+
+          report <- function(...) cat("[ecosystem-smoke]", ..., "\n")
+
+          fail <- function(...) {
+            report("FAIL:", ...)
+            quit(status = 1L)
+          }
+
+          atlas <- dk()
+          expected <- unique(atlas_labels(atlas))
+          report("ggseg.formats:", length(expected), "labels in dk()")
+
+          # ggseg.extra re-exports the reshaping vocabulary and claims those re-exports
+          # dispatch to ggseg.formats' single generic. Reaching the verbs through
+          # ggseg.extra is what tests that claim.
+          subset_labels <- expected[seq_len(min(6L, length(expected)))]
+          keep_pattern <- paste0("^(", paste(subset_labels, collapse = "|"), ")$")
+          reshaped <- ggseg.extra::atlas_region_keep(atlas, pattern = keep_pattern)
+          kept <- unique(atlas_labels(reshaped))
+          if (!setequal(kept, subset_labels)) {
+            fail(
+              "atlas_region_keep() through ggseg.extra kept",
+              paste(sort(kept), collapse = ", "),
+              "but was asked for",
+              paste(sort(subset_labels), collapse = ", ")
+            )
+          }
+          report("ggseg.extra: reshaped to", length(kept), "labels")
+
+          # 2D. Build the plot rather than snapshot it: this runs under CRAN rules,
+          # where vdiffr skips, and a structural assertion is what survives there.
+          built <- ggplot_build(ggplot() + geom_brain(atlas = atlas))
+          if (length(built$data) < 1L || nrow(built$data[[1]]) == 0L) {
+            fail("geom_brain() built no data for dk()")
+          }
+          drawn_2d <- sum(!is.na(unique(built$data[[1]]$fill)))
+          if (drawn_2d < 2L) {
+            fail("geom_brain() drew", drawn_2d, "distinct fills; the atlas has regions")
+          }
+          report("ggseg:", nrow(built$data[[1]]), "rows,", drawn_2d, "distinct fills")
+
+          widget <- ggseg3d(atlas = atlas)
+          if (!inherits(widget, "htmlwidget")) {
+            fail("ggseg3d() returned", paste(class(widget), collapse = "/"))
+          }
+          mesh_colours <- unlist(lapply(widget$x$meshes, function(mesh) unique(mesh$colors)))
+          drawn_3d <- length(unique(mesh_colours))
+          if (drawn_3d < 2L) {
+            fail("ggseg3d() painted", drawn_3d, "colours; the atlas has regions")
+          }
+          report("ggseg3d:", length(widget$x$meshes), "meshes,", drawn_3d, "distinct colours")
+
+          # The invariant worth gating. Both renderers resolve colour through
+          # ggseg.formats::atlas_plot_palette(), so for one atlas they must paint the
+          # same number of distinct colours. A renderer that silently drops regions
+          # still returns a valid object and still passes its own package's checks; it
+          # fails here. This is the only assertion in the ecosystem that compares the
+          # two backends against each other rather than each against itself.
+          if (drawn_2d != drawn_3d) {
+            fail(
+              "renderers disagree on how many regions dk() has:",
+              "ggseg painted", drawn_2d, "distinct fills,",
+              "ggseg3d painted", drawn_3d, "distinct colours"
+            )
+          }
+
+          report("OK:", drawn_2d, "regions painted identically by both renderers")

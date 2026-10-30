@@ -144,7 +144,7 @@ jobs:
             printf '%s file(s) changed. What set the tier:\n\n' "$N_FILES"
             printf '%s\n' "$REASONS"
             printf '**Gate:** %s\n\n' "$gate"
-            printf '<sub>Computed from changed paths, not from the tier ticked in the description. '
+            printf '<sub>Computed from changed paths. Authors do not declare a tier. '
             printf 'Policy: [RISK_TIERS.md](https://github.com/ggsegverse/.github/blob/main/RISK_TIERS.md) · '
             printf 'Revert paths: [ROLLBACK.md](https://github.com/ggsegverse/.github/blob/main/ROLLBACK.md)</sub>\n'
           } > body.md

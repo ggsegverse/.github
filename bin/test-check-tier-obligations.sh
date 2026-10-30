@@ -28,48 +28,54 @@ expect() {
     fi
 }
 
-GOOD='## Risk
+GOOD='## Testing
 
-- [x] **T1** — new behaviour
+Covered by CI.
 
 ## How to revert
 
 git revert abc123 and push.'
 
-NO_TICK='## Risk
+NO_REVERT='## Testing
 
-- [ ] **T1** — new behaviour
-
-## How to revert
-
-git revert abc123.'
-
-NO_REVERT='## Risk
-
-- [x] **T2** — exported API
+Covered by CI.
 
 ## How to revert
 
 <!-- The specific one-step path. See ROLLBACK.md -->'
 
+# The tier is computed, never declared, so a body that says nothing about risk
+# is correct and must pass. This is the case the old tier-box requirement got
+# wrong, and it only ever passed because the grep matched any ticked box at all,
+# including the Checklist.
+NO_RISK_SECTION='## Description
+
+Adds a thing.
+
+## How to revert
+
+git revert abc123.'
+
 echo "check-tier-obligations.sh"
 
 expect "T0 skips every obligation"        pass 0 0 ""
 expect "T1 complete"                      pass 1 0 "$GOOD"
-expect "T1 with no tier ticked"           fail 1 0 "$NO_TICK"
+expect "T1 with no risk section"          pass 1 0 "$NO_RISK_SECTION"
 expect "T2 with only the placeholder"     fail 2 1 "$NO_REVERT"
 expect "T2 complete and revdep green"     pass 2 1 "$GOOD"
 expect "T2 complete but revdep not green" fail 2 0 "$GOOD"
 expect "T1 ignores revdep"                pass 1 0 "$GOOD"
 
-UNDERDECLARED='## Risk
+# A ticked box that is not a tier must not be mistaken for one, in either
+# direction: it neither satisfies nor fails anything now.
+TICKED_CHECKLIST='## How to revert
 
-- [x] **T0** — docs
+Revert the commit.
 
-## How to revert
+## Checklist
 
-Revert the commit.'
-expect "under-declared tier warns, does not fail" pass 1 0 "$UNDERDECLARED"
+- [x] I have read the contributing guidelines'
+expect "an unrelated ticked box is ignored"       pass 1 0 "$TICKED_CHECKLIST"
 
 bf=$(mktemp)
 printf '%s\n' "$GOOD" > "$bf"
@@ -79,11 +85,13 @@ else
     echo "  FAIL missing revdep gave no actionable command"; fail=$((fail + 1))
 fi
 
-printf '%s\n' "$UNDERDECLARED" > "$bf"
-if sh "$check" "$bf" 1 0 2>&1 | grep -q '::warning::Declared T0'; then
-    echo "  ok   under-declaration is reported as a warning"; pass=$((pass + 1))
+# There is no declared tier to disagree with the computed one any more, so the
+# check must never emit the old warning, whatever the body says.
+printf '%s\n' "$TICKED_CHECKLIST" > "$bf"
+if sh "$check" "$bf" 1 0 2>&1 | grep -q '::warning::Declared'; then
+    echo "  FAIL still reports a declared tier"; fail=$((fail + 1))
 else
-    echo "  FAIL no warning for under-declaration"; fail=$((fail + 1))
+    echo "  ok   no tier is read from the body"; pass=$((pass + 1))
 fi
 rm -f "$bf"
 

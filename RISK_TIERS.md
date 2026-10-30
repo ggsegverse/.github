@@ -4,8 +4,9 @@ Organisation-wide policy for every ggsegverse package. Enforced automatically by
 `pr-risk-tier` reusable workflow, which computes the tier from the paths a pull request
 changes and labels it `risk:T0`/`risk:T1`/`risk:T2`.
 
-Risk is a property of the diff, not of how confident the author feels. Classify by what the
-change touches, then apply the matching gate.
+Risk is a property of the diff, not of how confident the author feels. The workflow classifies
+by what the change touches and applies the matching gate; **authors do not state a tier in the
+pull request**, and nothing reads one from the description.
 
 ## T0 — merge on green CI
 

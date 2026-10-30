@@ -20,18 +20,11 @@ fi
 
 fail=0
 
-# A ticked box in the Risk section. Unchecked or absent means the author has not
-# classified the change at all, which is the thing the tier system exists to stop.
-if ! grep -qE '^[[:space:]]*-[[:space:]]*\[[xX]\]' "$body"; then
-    echo "::error::No risk tier ticked in the PR description. Tick the T$tier box."
-    fail=1
-else
-    declared=$(grep -E '^[[:space:]]*-[[:space:]]*\[[xX]\]' "$body" |
-        grep -oE 'T[0-2]' | head -1 | tr -d 'T')
-    if [ -n "${declared:-}" ] && [ "$declared" -lt "$tier" ]; then
-        echo "::warning::Declared T$declared but the diff computes to T$tier. The computed tier governs."
-    fi
-fi
+# The tier is not the author's to declare. classify-risk.sh computes it from the
+# changed paths, which is the whole point: "risk is a property of the diff, not
+# of how confident the author feels". Asking for it twice invited exactly the
+# disagreement the computed tier then has to overrule, and the check could not
+# tell a ticked tier from any other ticked box in the body anyway.
 
 # How to revert, for anything that can reach a user. Comments in the template
 # are stripped, so leaving the placeholder untouched counts as empty.

@@ -102,25 +102,6 @@ jobs:
           done
           gh api -X POST "repos/$REPO/issues/$PR/labels" -f "labels[]=risk:T$TIER" >/dev/null
 
-      - name: Resolve revdep status
-        id: revdep
-        env:
-          GH_TOKEN: ${{ steps.bot.outputs.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
-          # --slurp cannot be combined with -q, so page explicitly: a matrix
-          # revdep-check can easily push the run list past one page.
-          n=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-                -q '.check_runs[] | select(.name | test("revdep|ecosystem"; "i"))
-                     | select(.conclusion == "success") | .name' | wc -l | tr -d ' ')
-          if [ "${n:-0}" -gt 0 ]; then
-            echo "green=1" >> "$GITHUB_OUTPUT"
-          else
-            echo "green=0" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Post or update the classification comment
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
@@ -159,6 +140,24 @@ jobs:
             echo "posted new comment"
           fi
 
+      - name: Resolve revdep status
+        id: revdep
+        if: steps.classify.outputs.tier == '2' && inputs.require-revdep
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          # Waits rather than looking once. This step finishes in seconds while
+          # the ecosystem check takes minutes, so a single look always found
+          # nothing and every T2 push failed the gate on timing alone. Waiting
+          # does not weaken the obligation: a qualifying check that fails still
+          # fails, and a commit with none still fails once the grace period
+          # shows none is coming.
+          green=$(sh .ggseg-policy/bin/await-revdep.sh "$REPO" "$SHA")
+          echo "green=$green" >> "$GITHUB_OUTPUT"
+
       - name: Gate on tier obligations
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
@@ -174,7 +173,9 @@ jobs:
             echo "::warning::risk-override label present; skipping tier obligations."
             exit 0
           fi
-          green="$REVDEP_GREEN"
+          # The wait is skipped for anything but a gated T2, so an empty
+          # output means "not applicable" rather than "not green".
+          green=${REVDEP_GREEN:-1}
           [ "$REQUIRE_REVDEP" = "true" ] || green=1
           gh api "repos/$REPO/pulls/$PR" -q '.body // ""' > body.txt
           sh .ggseg-policy/bin/check-tier-obligations.sh body.txt "$TIER" "$green" "$HEAD_REF"

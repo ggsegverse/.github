@@ -31,3 +31,6 @@ jobs:
 
       - name: check-tier-obligations
         run: sh bin/test-check-tier-obligations.sh
+
+      - name: classify-revdep-checks
+        run: sh bin/test-classify-revdep-checks.sh

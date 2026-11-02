@@ -37,14 +37,18 @@ if [ -z "$revert" ]; then
 fi
 
 if [ "$tier" = "2" ] && [ "$revdep_green" != "1" ]; then
+    # The caller waits for a qualifying check to finish before deciding, so by
+    # the time this runs the answer is settled: either one ran and did not
+    # succeed, or none is coming. Which of those it was has already been
+    # reported by the wait, so this does not guess between them.
+    echo "::error::T2 requires a green revdep-check or ecosystem-check on this commit."
     # revdep-check is workflow_dispatch-only by design: it is expensive, so it
     # runs when asked rather than on every push. The gate therefore has to tell
-    # you to ask, not merely that something is missing.
-    echo "::error::T2 requires a green revdep-check or ecosystem-check on this commit. None found yet."
+    # you how to ask, not merely that something is missing.
     if [ -n "$head_ref" ]; then
-        echo "::notice::Dispatch it on this branch, then re-run this check:  gh workflow run revdep-check.yaml --ref $head_ref"
+        echo "::notice::The ecosystem check satisfies this too. To dispatch a revdep run:  gh workflow run revdep-check.yaml --ref $head_ref"
     else
-        echo "::notice::Dispatch revdep-check.yaml on this branch, then re-run this check."
+        echo "::notice::The ecosystem check satisfies this too, or dispatch revdep-check.yaml on this branch."
     fi
     fail=1
 fi

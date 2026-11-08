@@ -148,9 +148,20 @@ jobs:
               #  * tidyverse_test_file_names: expects a test-<file>.R for every
               #    R/ file, which false-positives on files holding no testable
               #    code (e.g. <pkg>-package.R doc stubs, re-export shims).
+              #  * no_description_depends: `Depends` is the right mechanism in
+              #    one place here. ggseg.extra carries ggseg.formats in it so
+              #    that attaching ggseg.extra brings the atlas vocabulary with
+              #    it, which is what every atlas build needs; the alternative
+              #    was re-exporting each verb by hand, a list that twice went
+              #    stale. The usual objection -- a polluted search path -- is
+              #    the point rather than the cost, and the colliding names
+              #    (`dk`, `aseg`, `tracula`, `suit`) are `identical()` objects
+              #    re-exported from one definition, so masking costs a message
+              #    rather than an atlas.
               "covr",
               "complexity_function_length",
-              "tidyverse_test_file_names"
+              "tidyverse_test_file_names",
+              "no_description_depends"
             )
           )
 

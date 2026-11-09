@@ -146,16 +146,37 @@ jobs:
           expected <- unique(atlas_labels(atlas))
           report("ggseg.formats:", length(expected), "labels in dk()")
 
-          # ggseg.extra re-exports the reshaping vocabulary and claims those re-exports
-          # dispatch to ggseg.formats' single generic. Reaching the verbs through
-          # ggseg.extra is what tests that claim.
+          # ggseg.extra has to put the reshaping vocabulary within reach of
+          # someone who attached only ggseg.extra. Either mechanism satisfies
+          # that: it used to re-export each verb one at a time, and now carries
+          # ggseg.formats in `Depends`, so attaching it is enough. Both are
+          # accepted on purpose -- asserting one alone would fail this check for
+          # every other repo during the changeover -- but neither being true is
+          # a real break, and is what this catches.
+          extra_depends <- packageDescription("ggseg.extra")[["Depends"]]
+          extra_depends <- if (is.null(extra_depends)) {
+            character()
+          } else {
+            trimws(sub("\\(.*", "", strsplit(extra_depends, ",")[[1]]))
+          }
+          if (
+            !"atlas_region_keep" %in% getNamespaceExports("ggseg.extra") &&
+              !"ggseg.formats" %in% extra_depends
+          ) {
+            fail(
+              "ggseg.extra neither re-exports atlas_region_keep() nor depends",
+              "on ggseg.formats, so attaching it alone does not bring the",
+              "reshaping vocabulary with it"
+            )
+          }
+
           subset_labels <- expected[seq_len(min(6L, length(expected)))]
           keep_pattern <- paste0("^(", paste(subset_labels, collapse = "|"), ")$")
-          reshaped <- ggseg.extra::atlas_region_keep(atlas, pattern = keep_pattern)
+          reshaped <- atlas_region_keep(atlas, pattern = keep_pattern)
           kept <- unique(atlas_labels(reshaped))
           if (!setequal(kept, subset_labels)) {
             fail(
-              "atlas_region_keep() through ggseg.extra kept",
+              "atlas_region_keep() kept",
               paste(sort(kept), collapse = ", "),
               "but was asked for",
               paste(sort(subset_labels), collapse = ", ")

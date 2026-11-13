@@ -186,22 +186,30 @@ jobs:
 
           # 2D. Build the plot rather than snapshot it: this runs under CRAN rules,
           # where vdiffr skips, and a structural assertion is what survives there.
-          built <- ggplot_build(ggplot() + geom_brain(atlas = atlas))
-          if (length(built$data) < 1L || nrow(built$data[[1]]) == 0L) {
+          # geom_brain() draws the context backdrop as a layer of its own, so ask
+          # for the regions layer by name -- its position is not part of the API,
+          # and taking layer 1 reads the backdrop and counts its single grey.
+          plot_2d <- ggplot() + geom_brain(atlas = atlas)
+          drawn <- brain_layer_data(plot_2d)
+          if (nrow(drawn) == 0L) {
             fail("geom_brain() built no data for dk()")
           }
-          drawn_2d <- sum(!is.na(unique(built$data[[1]]$fill)))
+          drawn_2d <- sum(!is.na(unique(drawn$fill)))
           if (drawn_2d < 2L) {
             fail("geom_brain() drew", drawn_2d, "distinct fills; the atlas has regions")
           }
-          report("ggseg:", nrow(built$data[[1]]), "rows,", drawn_2d, "distinct fills")
+          report("ggseg:", nrow(drawn), "rows,", drawn_2d, "distinct fills")
 
-          widget <- ggseg3d(atlas = atlas)
+          # ggseg3d paints unlabelled vertices -- the medial wall, which 2D keeps
+          # in its context layer -- with na_colour. Give it a colour no palette
+          # uses so it can be discounted, leaving region colours on both sides.
+          na_sentinel <- "#010203"
+          widget <- ggseg3d(atlas = atlas, na_colour = na_sentinel)
           if (!inherits(widget, "htmlwidget")) {
             fail("ggseg3d() returned", paste(class(widget), collapse = "/"))
           }
           mesh_colours <- unlist(lapply(widget$x$meshes, function(mesh) unique(mesh$colors)))
-          drawn_3d <- length(unique(mesh_colours))
+          drawn_3d <- length(setdiff(unique(mesh_colours), na_sentinel))
           if (drawn_3d < 2L) {
             fail("ggseg3d() painted", drawn_3d, "colours; the atlas has regions")
           }

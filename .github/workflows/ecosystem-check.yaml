@@ -19,6 +19,18 @@
 # only satisfiable gate.
 on:
   workflow_call:
+    inputs:
+      extra-repositories:
+        description: >
+          Extra CRAN-like repositories prepended to `repos` before dependency resolution,
+          e.g. `https://ggsegverse.r-universe.dev`. Empty by default, so resolution is
+          CRAN/RSPM only. This workflow builds the five checked-out packages from
+          source, so set it only for an ecosystem dependency that is NOT among them and
+          is not on CRAN -- ggseg.meshes, which ggsegverse imports. Do not use it to
+          reach a dev sibling that is checked out here: that would resolve the published
+          version instead of the one under test and defeat the gate.
+        type: string
+        default: ""
 
 name: ecosystem-check (reusable)
 
@@ -74,6 +86,7 @@ jobs:
 
       - uses: r-lib/actions/setup-r@v2
         with:
+          extra-repositories: ${{ inputs.extra-repositories }}
           use-public-rspm: true
 
       - name: Install pak

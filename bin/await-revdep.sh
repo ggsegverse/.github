@@ -23,7 +23,11 @@ set -eu
 repo=${1:?usage: await-revdep.sh <repo> <sha>}
 sha=${2:?}
 
-timeout=${AWAIT_REVDEP_TIMEOUT:-1800}
+# The cap only needs to outlast the slowest qualifying check. `ecosystem smoke
+# (cross-package)` was measured at 43 min on ggseg.formats #126, so 1800s timed
+# out on every T2 push; this leaves roughly twice its runtime of headroom and
+# is bounded by the gate job's own timeout-minutes.
+timeout=${AWAIT_REVDEP_TIMEOUT:-5400}
 interval=${AWAIT_REVDEP_INTERVAL:-15}
 grace=${AWAIT_REVDEP_GRACE:-120}
 

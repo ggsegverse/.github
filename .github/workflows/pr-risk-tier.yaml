@@ -38,6 +38,8 @@ permissions:
 jobs:
   risk-tier:
     runs-on: ubuntu-latest
+    # Most of this is the T2 wait for the ecosystem check; see await-revdep.sh.
+    timeout-minutes: 100
 
     steps:
       - name: Mint ggseg-bot token
